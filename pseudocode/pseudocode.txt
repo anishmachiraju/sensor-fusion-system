@@ -1,0 +1,188 @@
+================================================================================
+  PSEUDOCODE — Sensor Fusion System for Autonomous Vehicle Simulation
+  EECE 2140 | Jeongheon Han (David), Charles Wan, Anish Machiraju
+================================================================================
+
+
+FUNCTIONALITY 1: Generate Sensor Reading (Sensor base class)
+--------------------------------------------------------------------------------
+Purpose:  Produce a noisy measurement from the true vehicle state.
+Input:    True vehicle state (StateEstimate)
+Output:   Noisy StateEstimate reading
+
+FUNCTION shouldUpdate(currentTime) -> bool
+    interval = 1.0 / updateRate
+    IF currentTime - lastUpdateTime >= interval THEN
+        RETURN true
+    ELSE
+        RETURN false
+
+FUNCTION generateReading(trueState) -> StateEstimate
+    VALIDATE: trueState.timestamp >= 0
+    reading = copy of trueState
+    noise = random Gaussian(mean=0, stddev=noiseSigma)
+    Add noise + biasOffset to relevant fields of reading
+    IF isCalibrated THEN
+        reading fields = (reading fields - calibrationOffset) * calibrationScale
+    lastReading = reading
+    lastUpdateTime = trueState.timestamp
+    RETURN reading
+
+FUNCTION calibrate(offset, scale) -> void
+    VALIDATE: scale != 0
+    calibrationOffset = offset
+    calibrationScale = scale
+    isCalibrated = true
+
+
+FUNCTIONALITY 2: GPS Sensor Reading (GPSSensor subclass override)
+--------------------------------------------------------------------------------
+Purpose:  Produce noisy position data with simulated signal dropout.
+Input:    True vehicle state (StateEstimate)
+Output:   Noisy StateEstimate with perturbed positionX, positionY
+
+FUNCTION generateReading(trueState) -> StateEstimate
+    VALIDATE: trueState is not empty
+    IF random_uniform(0, 1) < dropoutRate THEN
+        RETURN lastReading                    // simulate signal loss
+    reading = copy of trueState
+    noiseX = Gaussian(0, positionNoiseSigma)
+    noiseY = Gaussian(0, positionNoiseSigma)
+    reading.positionX = reading.positionX + noiseX + positionBias
+    reading.positionY = reading.positionY + noiseY + positionBias
+    IF isCalibrated THEN
+        Apply calibration offset and scale to positionX, positionY
+    lastReading = reading
+    lastUpdateTime = trueState.timestamp
+    RETURN reading
+
+
+FUNCTIONALITY 3: Weighted-Average Data Fusion (FusionSystem)
+--------------------------------------------------------------------------------
+Purpose:  Combine calibrated readings from all sensors into one fused estimate.
+Input:    Registered sensors with weights
+Output:   Fused StateEstimate
+
+FUNCTION addSensor(sensor, weight) -> void
+    VALIDATE: sensor is not null, weight > 0
+    Append sensor to sensors list
+    Append weight to weights list
+
+FUNCTION fuseData() -> StateEstimate
+    VALIDATE: sensors list is not empty
+    totalWeight = 0
+    fused = new StateEstimate with all fields = 0
+
+    FOR i = 0 TO sensors.size() - 1
+        reading = sensors[i].getLastReading()
+        w = weights[i]
+        fused.positionX   = fused.positionX   + w * reading.positionX
+        fused.positionY   = fused.positionY   + w * reading.positionY
+        fused.velocityX   = fused.velocityX   + w * reading.velocityX
+        fused.velocityY   = fused.velocityY   + w * reading.velocityY
+        fused.heading      = fused.heading      + w * reading.heading
+        fused.temperature  = fused.temperature  + w * reading.temperature
+        totalWeight = totalWeight + w
+    END FOR
+
+    VALIDATE: totalWeight > 0
+    Divide every fused field by totalWeight    // normalize
+    fusedState = fused
+    RETURN fusedState
+
+
+FUNCTIONALITY 4: Vehicle Step Simulation and Predict (Vehicle)
+--------------------------------------------------------------------------------
+Purpose:  Advance vehicle state via kinematics; predict future state.
+Input:    Current state, speed, turnRate, timestep dt
+Output:   Updated / predicted StateEstimate
+
+FUNCTION stepSimulation(dt) -> void
+    VALIDATE: dt > 0
+    state.heading = state.heading + turnRate * dt
+    WRAP state.heading into [0, 360)
+    headingRad = state.heading * pi / 180
+    state.velocityX = speed * cos(headingRad)
+    state.velocityY = speed * sin(headingRad)
+    state.positionX = state.positionX + state.velocityX * dt
+    state.positionY = state.positionY + state.velocityY * dt
+    state.timestamp = state.timestamp + dt
+    Append state to stateHistory
+
+FUNCTION predict(dt) -> StateEstimate
+    VALIDATE: dt > 0
+    predicted = copy of state
+    predicted.heading = predicted.heading + turnRate * dt
+    headingRad = predicted.heading * pi / 180
+    predicted.velocityX = speed * cos(headingRad)
+    predicted.velocityY = speed * sin(headingRad)
+    predicted.positionX = predicted.positionX + predicted.velocityX * dt
+    predicted.positionY = predicted.positionY + predicted.velocityY * dt
+    predicted.timestamp = predicted.timestamp + dt
+    RETURN predicted
+
+FUNCTION updateState(fusedEstimate) -> void
+    state = fusedEstimate
+
+FUNCTION displayState() -> void
+    Output "Time:", state.timestamp
+    Output "Position: (", state.positionX, ",", state.positionY, ")"
+    Output "Velocity: (", state.velocityX, ",", state.velocityY, ")"
+    Output "Heading:",    state.heading, "degrees"
+    Output "Temperature:", state.temperature, "C"
+
+
+FUNCTIONALITY 5: Main Simulation Loop
+--------------------------------------------------------------------------------
+Purpose:  Orchestrate the full pipeline each timestep.
+Input:    Duration, dt, initial conditions, sensor configuration
+Output:   Complete state history log
+
+FUNCTION runSimulation(duration, dt, initialState)
+    VALIDATE: duration > 0, dt > 0, dt <= duration
+
+    // Create vehicle
+    vehicle = new Vehicle(initialState)
+
+    // Create and calibrate sensors
+    imu     = new IMUSensor(accelSigma, gyroBias, imuRate)
+    gps     = new GPSSensor(posSigma, posBias, gpsRate)
+    temp    = new TemperatureSensor(tempSigma, tempBias, tempRate)
+    encoder = new WheelEncoderSensor(tickSigma, tickBias, radius, ticks)
+    imu.calibrate(imuOffset, imuScale)
+    gps.calibrate(gpsOffset, gpsScale)
+    temp.calibrate(tempOffset, tempScale)
+    encoder.calibrate(encOffset, encScale)
+
+    // Register sensors with fusion system
+    fusion = new FusionSystem()
+    fusion.addSensor(imu,     0.30)
+    fusion.addSensor(gps,     0.35)
+    fusion.addSensor(temp,    0.10)
+    fusion.addSensor(encoder, 0.25)
+
+    // Main loop
+    currentTime = 0
+    WHILE currentTime < duration
+        vehicle.stepSimulation(dt)
+        trueState = vehicle.getState()
+
+        FOR each sensor in [imu, gps, temp, encoder]
+            IF sensor.shouldUpdate(currentTime) THEN
+                sensor.generateReading(trueState)
+        END FOR
+
+        TRY:
+            fusedEstimate = fusion.fuseData()
+            vehicle.updateState(fusedEstimate)
+            vehicle.displayState()
+        CATCH exception:
+            Output error message, continue to next step
+
+        currentTime = currentTime + dt
+    END WHILE
+
+    // Final output
+    history = vehicle.getHistory()
+    Output formatted table of all states in history
+    RETURN history
