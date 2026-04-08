@@ -1,22 +1,12 @@
 /**
  * Sensor Fusion System for Autonomous Vehicle Simulation
- * EECE 2140 — Professor Nafa
+ * EECE 2140 - Professor Nafa
  *
  * Team: Jeongheon Han (David), Charles Wan, Anish Machiraju
  *
- * This program simulates an autonomous vehicle equipped with
- * IMU, GPS, Temperature, and Wheel Encoder sensors. Noisy readings
- * from each sensor are fused via a weighted-average algorithm to
- * produce an accurate state estimate at every timestep.
- *
- * Interactive GUI dashboard built with SFML shows:
- *   - A live 2D map with the vehicle, heading arrow, and trajectory
- *   - Real-time data panels for all four sensors
- *   - The fused state estimate panel
- *
  * Build:
- *   g++ -std=c++17 src/ALL.cpp -o simulation \
- *       -lsfml-graphics -lsfml-window -lsfml-system
+ *   make           (uses Makefile)
+ *   ./simulation
  */
 
 #include <iostream>
@@ -24,6 +14,7 @@
 #include <stdexcept>
 #include <chrono>
 #include <thread>
+#include <memory>
 
 #include "StateEstimate.h"
 #include "IMUSensor.h"
@@ -34,11 +25,24 @@
 #include "Vehicle.h"
 #include "Visualizer.h"
 
-int main() {
-    // ---- Configuration ----
-    double dt = 0.1;   // timestep size (seconds) - smaller for smooth animation
+// ---------------------------------------------------------------------------
+// Simulation bundle — everything that needs to be rebuilt on a reset
+// ---------------------------------------------------------------------------
+struct Simulation {
+    std::unique_ptr<Vehicle>            vehicle;
+    std::unique_ptr<IMUSensor>          imu;
+    std::unique_ptr<GPSSensor>          gps;
+    std::unique_ptr<TemperatureSensor>  temp;
+    std::unique_ptr<WheelEncoderSensor> encoder;
+    std::unique_ptr<FusionSystem>       fusion;
+    double currentTime = 0.0;
+};
 
-    // ---- Initial vehicle state ----
+// Build (or rebuild) a fresh Simulation instance from default parameters
+static Simulation makeSimulation() {
+    Simulation sim;
+
+    // Initial vehicle state
     StateEstimate initState;
     initState.positionX   = 0.0;
     initState.positionY   = 0.0;
@@ -48,102 +52,114 @@ int main() {
     initState.temperature = 22.0;
     initState.timestamp   = 0.0;
 
-    // ---- Create vehicle ----
-    double vehicleSpeed    = 5.0;   // m/s
-    double vehicleTurnRate = 10.0;  // deg/s
-    Vehicle vehicle(initState, vehicleSpeed, vehicleTurnRate);
+    // Vehicle parameters
+    const double vehicleSpeed    = 5.0;   // m/s
+    const double vehicleTurnRate = 10.0;  // deg/s
 
-    // ---- Create sensors ----
-    IMUSensor          imu(   0.3,  0.5,  0.05, 0.02, 100.0);
-    GPSSensor          gps(   1.5,  0.1,  0.05, 1.0);
-    TemperatureSensor  temp(  0.2,  0.1,  0.3,  1.0);
-    WheelEncoderSensor encoder(0.5, 0.05, 0.3, 360, 50.0);
+    sim.vehicle = std::make_unique<Vehicle>(initState, vehicleSpeed, vehicleTurnRate);
 
-    // ---- Calibrate sensors ----
-    imu.calibrate(0.05, 1.0);
-    gps.calibrate(0.1,  1.0);
-    temp.calibrate(0.1, 1.0);
-    encoder.calibrate(0.05, 1.0);
+    // Sensors
+    sim.imu     = std::make_unique<IMUSensor>(0.3, 0.5, 0.05, 0.02, 100.0);
+    sim.gps     = std::make_unique<GPSSensor>(1.5, 0.1, 0.05, 1.0);
+    sim.temp    = std::make_unique<TemperatureSensor>(0.2, 0.1, 0.3, 1.0);
+    sim.encoder = std::make_unique<WheelEncoderSensor>(0.5, 0.05, 0.3, 360, 50.0);
 
-    // ---- Fusion system ----
-    FusionSystem fusion;
-    fusion.addSensor(&imu,     0.30);
-    fusion.addSensor(&gps,     0.35);
-    fusion.addSensor(&temp,    0.10);
-    fusion.addSensor(&encoder, 0.25);
+    // Calibrate
+    sim.imu->calibrate(0.05, 1.0);
+    sim.gps->calibrate(0.1,  1.0);
+    sim.temp->calibrate(0.1, 1.0);
+    sim.encoder->calibrate(0.05, 1.0);
 
-    // ---- Launch GUI ----
+    // Fusion
+    sim.fusion = std::make_unique<FusionSystem>();
+    sim.fusion->addSensor(sim.imu.get(),     0.30);
+    sim.fusion->addSensor(sim.gps.get(),     0.35);
+    sim.fusion->addSensor(sim.temp.get(),    0.10);
+    sim.fusion->addSensor(sim.encoder.get(), 0.25);
+
+    sim.currentTime = 0.0;
+    return sim;
+}
+
+int main() {
+    const double dt = 0.1;  // simulation timestep (seconds)
+
+    // Build initial simulation and launch GUI
+    Simulation sim = makeSimulation();
     Visualizer viz;
 
     std::cout << "========================================================\n";
-    std::cout << "  Sensor Fusion System — Autonomous Vehicle Simulation\n";
-    std::cout << "  GUI launched. Controls:\n";
-    std::cout << "    SPACE  pause / resume\n";
-    std::cout << "    R      clear trajectory trail\n";
-    std::cout << "    ESC    quit\n";
+    std::cout << "  Sensor Fusion System - Autonomous Vehicle Simulation\n";
+    std::cout << "  GUI launched. Click START to begin.\n";
+    std::cout << "  Keyboard:  SPACE=pause/resume  R=reset  ESC=quit\n";
     std::cout << "========================================================\n";
 
-    // ---- Main loop: runs until window closes ----
-    double currentTime = 0.0;
     auto lastFrameTime = std::chrono::steady_clock::now();
 
     while (viz.isOpen()) {
         viz.handleEvents();
 
-        // Throttle simulation to real-time (~100ms per step)
+        // Handle reset request from the GUI (either button or keyboard)
+        if (viz.consumeResetRequest()) {
+            sim = makeSimulation();
+            viz.clearForReset();
+            std::cout << "[Reset] Simulation rebuilt from initial conditions.\n";
+        }
+
+        // Advance simulation only while Running
         auto now = std::chrono::steady_clock::now();
         double elapsed = std::chrono::duration<double>(now - lastFrameTime).count();
 
-        if (!viz.isPaused() && elapsed >= 0.05) {
+        if (viz.isRunning() && elapsed >= 0.05) {
             lastFrameTime = now;
 
-            // Step 1: Advance ground-truth vehicle state
-            vehicle.stepSimulation(dt);
-            StateEstimate trueState = vehicle.getState();
+            // 1. Advance ground truth
+            sim.vehicle->stepSimulation(dt);
+            StateEstimate trueState = sim.vehicle->getState();
 
-            // Step 2: Generate sensor readings (throttled by update rate)
-            if (imu.shouldUpdate(currentTime))     imu.generateReading(trueState);
-            if (gps.shouldUpdate(currentTime))     gps.generateReading(trueState);
-            if (temp.shouldUpdate(currentTime))    temp.generateReading(trueState);
-            if (encoder.shouldUpdate(currentTime)) encoder.generateReading(trueState);
+            // 2. Generate sensor readings (throttled by update rate)
+            if (sim.imu->shouldUpdate(sim.currentTime))
+                sim.imu->generateReading(trueState);
+            if (sim.gps->shouldUpdate(sim.currentTime))
+                sim.gps->generateReading(trueState);
+            if (sim.temp->shouldUpdate(sim.currentTime))
+                sim.temp->generateReading(trueState);
+            if (sim.encoder->shouldUpdate(sim.currentTime))
+                sim.encoder->generateReading(trueState);
 
-            // Step 3: Fuse
+            // 3. Fuse, update, and push to GUI
             try {
-                StateEstimate fusedEstimate = fusion.fuseData();
-                vehicle.updateState(fusedEstimate);
+                StateEstimate fusedEstimate = sim.fusion->fuseData();
+                sim.vehicle->updateState(fusedEstimate);
 
-                // Step 4: Push data into the visualizer
-                viz.update(vehicle.getState(),
-                           imu.getLastReading(),
-                           gps.getLastReading(),
-                           temp.getLastReading(),
-                           encoder.getLastReading(),
+                viz.update(sim.vehicle->getState(),
+                           sim.imu->getLastReading(),
+                           sim.gps->getLastReading(),
+                           sim.temp->getLastReading(),
+                           sim.encoder->getLastReading(),
                            fusedEstimate);
 
-                // Also log to console
                 std::cout << std::fixed << std::setprecision(2)
-                          << "t=" << std::setw(6) << currentTime
+                          << "t=" << std::setw(6) << sim.currentTime
                           << "s  pos=(" << std::setw(7) << fusedEstimate.positionX
                           << ", "       << std::setw(7) << fusedEstimate.positionY
                           << ")  hdg="  << std::setw(6) << fusedEstimate.heading
                           << "deg\n";
 
             } catch (const std::exception& e) {
-                std::cerr << "[ERROR] Fusion failed at t=" << currentTime
+                std::cerr << "[ERROR] Fusion failed at t=" << sim.currentTime
                           << ": " << e.what() << std::endl;
             }
 
-            currentTime += dt;
+            sim.currentTime += dt;
         }
 
-        // Always render (even when paused, so UI stays responsive)
+        // Always render (so buttons stay responsive even when Stopped/Paused)
         viz.render();
 
-        // Sleep briefly so we don't peg the CPU
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
 
-    std::cout << "\nSimulation window closed. Final time: "
-              << currentTime << "s\n";
+    std::cout << "\nSimulation window closed.\n";
     return 0;
 }

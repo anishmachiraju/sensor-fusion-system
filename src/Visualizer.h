@@ -9,18 +9,21 @@
 /**
  * @brief Real-time SFML dashboard for the sensor fusion simulation.
  *
- * Displays:
- *   - A 2D map with the vehicle's live position, heading arrow, and trajectory
- *   - Live data panels for IMU, GPS, Temperature, and WheelEncoder sensors
- *   - The fused state estimate panel
- *   - Grid, axes, and on-screen title
+ * Features:
+ *   - Live 2D map with the vehicle, heading arrow, and trajectory trail
+ *   - Data panels for IMU, GPS, Temperature, and WheelEncoder sensors
+ *   - Fused state estimate panel
+ *   - On-screen START / PAUSE / RESET buttons (clickable)
  *
- * Controls:
- *   - SPACE: pause/resume
- *   - R:     reset view
- *   - ESC:   quit
+ * Keyboard shortcuts:
+ *   - SPACE:  pause / resume
+ *   - R:      reset simulation
+ *   - ESC:    quit
  */
 class Visualizer {
+public:
+    enum class SimState { Stopped, Running, Paused };
+
 private:
     sf::RenderWindow window;
     sf::Font         font;
@@ -35,13 +38,19 @@ private:
     static const int PANEL_WIDTH   = 380;
 
     // Map state
-    float mapScale;           // pixels per meter
-    float mapOriginX;         // world origin in screen pixels
+    float mapScale;
+    float mapOriginX;
     float mapOriginY;
 
-    // Trajectory + paused state
+    // Trajectory + simulation state
     std::vector<sf::Vector2f> trajectory;
-    bool paused;
+    SimState  simState;
+    bool      resetFlag;  // set when Reset button pressed; main.cpp clears it
+
+    // Button rectangles (for hit testing)
+    sf::FloatRect btnStartRect;
+    sf::FloatRect btnPauseRect;
+    sf::FloatRect btnResetRect;
 
     // Latest snapshots
     StateEstimate currentState;
@@ -55,8 +64,14 @@ public:
     Visualizer();
     ~Visualizer() = default;
 
-    bool isOpen() const;
-    bool isPaused() const;
+    bool isOpen()    const;
+    bool isRunning() const;   // true if SimState::Running
+    bool isPaused()  const;
+    SimState getState() const;
+
+    // Returns true once when reset was requested; caller clears it by calling.
+    bool consumeResetRequest();
+
     void handleEvents();
 
     void update(const StateEstimate& current,
@@ -65,6 +80,9 @@ public:
                 const StateEstimate& temp,
                 const StateEstimate& encoder,
                 const StateEstimate& fused);
+
+    // Fully clear state (called by main.cpp after it rebuilds the vehicle)
+    void clearForReset();
 
     void render();
 
@@ -79,8 +97,15 @@ private:
     void drawFusedPanel();
     void drawTitleBar();
     void drawLegend();
+    void drawButtons();
+    void drawButton(const sf::FloatRect& rect, const std::string& label,
+                    sf::Color baseColor, bool enabled, bool highlighted);
     void drawText(const std::string& str, float x, float y,
                   unsigned size, sf::Color color);
+
+    // Mouse handling
+    bool pointInRect(float x, float y, const sf::FloatRect& r) const;
+    void handleButtonClick(float mx, float my);
 
     // Coordinate transform
     sf::Vector2f worldToScreen(float wx, float wy) const;

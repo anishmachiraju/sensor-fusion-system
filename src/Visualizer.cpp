@@ -19,11 +19,24 @@ Visualizer::Visualizer()
       mapScale(12.0f),
       mapOriginX(MAP_WIDTH * 0.25f),
       mapOriginY(MAP_HEIGHT * 0.75f),
-      paused(false)
+      simState(SimState::Stopped),
+      resetFlag(false)
 {
     window.setFramerateLimit(60);
 
-    // Try loading a font from common system locations (SFML 3: use openFromFile)
+    // Button layout: bottom-center of the map area
+    const float btnW = 110.f;
+    const float btnH = 36.f;
+    const float btnY = MAP_HEIGHT - 60.f;
+    const float gap  = 12.f;
+    const float groupW = 3 * btnW + 2 * gap;
+    const float startX = (MAP_WIDTH - groupW) * 0.5f;
+
+    btnStartRect = sf::FloatRect({startX,                       btnY}, {btnW, btnH});
+    btnPauseRect = sf::FloatRect({startX + (btnW + gap),        btnY}, {btnW, btnH});
+    btnResetRect = sf::FloatRect({startX + 2 * (btnW + gap),    btnY}, {btnW, btnH});
+
+    // Try loading a font from common system locations
     const char* fontPaths[] = {
         "/System/Library/Fonts/Helvetica.ttc",
         "/System/Library/Fonts/Supplemental/Arial.ttf",
@@ -47,8 +60,28 @@ Visualizer::Visualizer()
 
 // ---- Public API ----
 
-bool Visualizer::isOpen()   const { return window.isOpen(); }
-bool Visualizer::isPaused() const { return paused; }
+bool Visualizer::isOpen()    const { return window.isOpen(); }
+bool Visualizer::isRunning() const { return simState == SimState::Running; }
+bool Visualizer::isPaused()  const { return simState == SimState::Paused; }
+Visualizer::SimState Visualizer::getState() const { return simState; }
+
+bool Visualizer::consumeResetRequest() {
+    if (resetFlag) {
+        resetFlag = false;
+        return true;
+    }
+    return false;
+}
+
+void Visualizer::clearForReset() {
+    trajectory.clear();
+    currentState   = StateEstimate{};
+    imuReading     = StateEstimate{};
+    gpsReading     = StateEstimate{};
+    tempReading    = StateEstimate{};
+    encoderReading = StateEstimate{};
+    fusedState     = StateEstimate{};
+}
 
 void Visualizer::handleEvents() {
     while (const std::optional event = window.pollEvent()) {
@@ -60,13 +93,42 @@ void Visualizer::handleEvents() {
                 window.close();
             }
             else if (keyPressed->code == sf::Keyboard::Key::Space) {
-                paused = !paused;
+                // Toggle between Running and Paused (from Stopped, Space starts it)
+                if (simState == SimState::Running)      simState = SimState::Paused;
+                else if (simState == SimState::Paused)  simState = SimState::Running;
+                else if (simState == SimState::Stopped) simState = SimState::Running;
             }
             else if (keyPressed->code == sf::Keyboard::Key::R) {
-                trajectory.clear();
+                resetFlag = true;
+                simState  = SimState::Stopped;
+            }
+        }
+        else if (const auto* mouseBtn = event->getIf<sf::Event::MouseButtonPressed>()) {
+            if (mouseBtn->button == sf::Mouse::Button::Left) {
+                handleButtonClick(static_cast<float>(mouseBtn->position.x),
+                                  static_cast<float>(mouseBtn->position.y));
             }
         }
     }
+}
+
+void Visualizer::handleButtonClick(float mx, float my) {
+    if (pointInRect(mx, my, btnStartRect)) {
+        // START acts as Start (from Stopped) or Resume (from Paused)
+        if (simState != SimState::Running) simState = SimState::Running;
+    }
+    else if (pointInRect(mx, my, btnPauseRect)) {
+        if (simState == SimState::Running) simState = SimState::Paused;
+    }
+    else if (pointInRect(mx, my, btnResetRect)) {
+        resetFlag = true;
+        simState  = SimState::Stopped;
+    }
+}
+
+bool Visualizer::pointInRect(float x, float y, const sf::FloatRect& r) const {
+    return x >= r.position.x && x <= r.position.x + r.size.x &&
+           y >= r.position.y && y <= r.position.y + r.size.y;
 }
 
 void Visualizer::update(const StateEstimate& current,
@@ -97,6 +159,7 @@ void Visualizer::render() {
     drawVehicle();
     drawTitleBar();
     drawLegend();
+    drawButtons();
 
     drawSensorPanel(0, "IMU Sensor",         imuReading,
                     sf::Color(255, 128, 64));
@@ -138,7 +201,6 @@ void Visualizer::drawGrid() {
     const float spacing = 5.0f;
     float step = spacing * mapScale;
 
-    // Vertical grid lines
     for (float x = mapOriginX; x < MAP_WIDTH; x += step) {
         sf::Vertex line[] = {
             sf::Vertex{sf::Vector2f(x, 0),            gridColor},
@@ -153,8 +215,6 @@ void Visualizer::drawGrid() {
         };
         window.draw(line, 2, sf::PrimitiveType::Lines);
     }
-
-    // Horizontal grid lines
     for (float y = mapOriginY; y < MAP_HEIGHT; y += step) {
         sf::Vertex line[] = {
             sf::Vertex{sf::Vector2f(0, y),            gridColor},
@@ -170,7 +230,6 @@ void Visualizer::drawGrid() {
         window.draw(line, 2, sf::PrimitiveType::Lines);
     }
 
-    // Main axes
     sf::Vertex xAxis[] = {
         sf::Vertex{sf::Vector2f(0, mapOriginY),           axisColor},
         sf::Vertex{sf::Vector2f(MAP_WIDTH, mapOriginY),   axisColor}
@@ -203,18 +262,19 @@ void Visualizer::drawTrajectory() {
 }
 
 void Visualizer::drawVehicle() {
+    // Don't draw the vehicle until simulation has actually started
+    if (simState == SimState::Stopped && trajectory.empty()) return;
+
     sf::Vector2f pos = worldToScreen(
         static_cast<float>(currentState.positionX),
         static_cast<float>(currentState.positionY));
 
-    // Outer glow
     sf::CircleShape glow(16.f);
     glow.setOrigin({16.f, 16.f});
     glow.setPosition(pos);
     glow.setFillColor(sf::Color(100, 220, 255, 40));
     window.draw(glow);
 
-    // Vehicle body - triangle pointing in heading direction
     sf::ConvexShape body;
     body.setPointCount(3);
     body.setPoint(0, sf::Vector2f( 14.f,  0.f));
@@ -322,13 +382,23 @@ void Visualizer::drawTitleBar() {
     drawText("Sensor Fusion System - Live Vehicle Tracking",
              12, 10, 18, sf::Color(220, 235, 255));
 
-    std::string status = paused ? "PAUSED (press SPACE)" : "RUNNING";
-    sf::Color statusCol = paused ? sf::Color(255, 180, 80)
-                                 : sf::Color(120, 255, 160);
+    std::string status;
+    sf::Color statusCol;
+    switch (simState) {
+        case SimState::Running:
+            status = "RUNNING";
+            statusCol = sf::Color(120, 255, 160);
+            break;
+        case SimState::Paused:
+            status = "PAUSED";
+            statusCol = sf::Color(255, 180, 80);
+            break;
+        case SimState::Stopped:
+            status = "READY - press START";
+            statusCol = sf::Color(180, 200, 230);
+            break;
+    }
     drawText(status, MAP_WIDTH - 220, 12, 14, statusCol);
-
-    drawText("Controls: SPACE=pause  R=clear trail  ESC=quit",
-             12, MAP_HEIGHT - 22, 12, sf::Color(120, 140, 170));
 }
 
 void Visualizer::drawLegend() {
@@ -358,6 +428,59 @@ void Visualizer::drawLegend() {
     };
     window.draw(trail, 2, sf::PrimitiveType::Lines);
     drawText("Trajectory", x + 38, y + 33, 13, sf::Color(220, 230, 240));
+}
+
+void Visualizer::drawButtons() {
+    bool startEnabled = (simState != SimState::Running);
+    bool pauseEnabled = (simState == SimState::Running);
+    bool resetEnabled = true;
+
+    // Highlight the button that matches current state
+    bool startHighlight = (simState == SimState::Running);
+    bool pauseHighlight = (simState == SimState::Paused);
+
+    drawButton(btnStartRect,
+               simState == SimState::Paused ? "RESUME" : "START",
+               sf::Color(60, 180, 90), startEnabled, startHighlight);
+
+    drawButton(btnPauseRect, "PAUSE",
+               sf::Color(220, 160, 50), pauseEnabled, pauseHighlight);
+
+    drawButton(btnResetRect, "RESET",
+               sf::Color(200, 70, 70), resetEnabled, false);
+}
+
+void Visualizer::drawButton(const sf::FloatRect& rect, const std::string& label,
+                            sf::Color baseColor, bool enabled, bool highlighted) {
+    sf::RectangleShape btn(rect.size);
+    btn.setPosition(rect.position);
+
+    if (!enabled) {
+        btn.setFillColor(sf::Color(60, 65, 75));
+        btn.setOutlineColor(sf::Color(80, 85, 95));
+    } else if (highlighted) {
+        // Brighter fill when this action represents current state
+        btn.setFillColor(sf::Color(
+            std::min(255, baseColor.r + 40),
+            std::min(255, baseColor.g + 40),
+            std::min(255, baseColor.b + 40)));
+        btn.setOutlineColor(sf::Color::White);
+    } else {
+        btn.setFillColor(baseColor);
+        btn.setOutlineColor(sf::Color(
+            std::min(255, baseColor.r + 30),
+            std::min(255, baseColor.g + 30),
+            std::min(255, baseColor.b + 30)));
+    }
+    btn.setOutlineThickness(2);
+    window.draw(btn);
+
+    // Label (roughly centered). Without measuring text width we just
+    // nudge by a fixed amount based on label length.
+    sf::Color textCol = enabled ? sf::Color::White : sf::Color(130, 135, 145);
+    float cx = rect.position.x + rect.size.x * 0.5f - label.size() * 4.5f;
+    float cy = rect.position.y + rect.size.y * 0.5f - 10.f;
+    drawText(label, cx, cy, 15, textCol);
 }
 
 void Visualizer::drawText(const std::string& str, float x, float y,
