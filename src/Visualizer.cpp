@@ -3,6 +3,7 @@
 #include <iomanip>
 #include <cmath>
 #include <iostream>
+#include <optional>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -11,7 +12,7 @@
 // ---- Construction ----
 
 Visualizer::Visualizer()
-    : window(sf::VideoMode(WINDOW_WIDTH, WINDOW_HEIGHT),
+    : window(sf::VideoMode({WINDOW_WIDTH, WINDOW_HEIGHT}),
              "Sensor Fusion System - Autonomous Vehicle Simulation",
              sf::Style::Titlebar | sf::Style::Close),
       fontLoaded(false),
@@ -22,23 +23,25 @@ Visualizer::Visualizer()
 {
     window.setFramerateLimit(60);
 
-    // Try loading a font from common system locations
+    // Try loading a font from common system locations (SFML 3: use openFromFile)
     const char* fontPaths[] = {
+        "/System/Library/Fonts/Helvetica.ttc",
+        "/System/Library/Fonts/Supplemental/Arial.ttf",
+        "/Library/Fonts/Arial.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
         "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-        "/System/Library/Fonts/Helvetica.ttc",
         "C:/Windows/Fonts/arial.ttf",
         "arial.ttf",
         "DejaVuSans.ttf"
     };
     for (const char* path : fontPaths) {
-        if (font.loadFromFile(path)) {
+        if (font.openFromFile(path)) {
             fontLoaded = true;
             break;
         }
     }
     if (!fontLoaded) {
-        std::cerr << "[Visualizer] Warning: no font found — text will not render\n";
+        std::cerr << "[Visualizer] Warning: no font found - text will not render\n";
     }
 }
 
@@ -48,19 +51,18 @@ bool Visualizer::isOpen()   const { return window.isOpen(); }
 bool Visualizer::isPaused() const { return paused; }
 
 void Visualizer::handleEvents() {
-    sf::Event event;
-    while (window.pollEvent(event)) {
-        if (event.type == sf::Event::Closed) {
+    while (const std::optional event = window.pollEvent()) {
+        if (event->is<sf::Event::Closed>()) {
             window.close();
         }
-        if (event.type == sf::Event::KeyPressed) {
-            if (event.key.code == sf::Keyboard::Escape) {
+        else if (const auto* keyPressed = event->getIf<sf::Event::KeyPressed>()) {
+            if (keyPressed->code == sf::Keyboard::Key::Escape) {
                 window.close();
             }
-            if (event.key.code == sf::Keyboard::Space) {
+            else if (keyPressed->code == sf::Keyboard::Key::Space) {
                 paused = !paused;
             }
-            if (event.key.code == sf::Keyboard::R) {
+            else if (keyPressed->code == sf::Keyboard::Key::R) {
                 trajectory.clear();
             }
         }
@@ -80,7 +82,6 @@ void Visualizer::update(const StateEstimate& current,
     encoderReading = encoder;
     fusedState     = fused;
 
-    // Record to trajectory
     sf::Vector2f pt = worldToScreen(
         static_cast<float>(current.positionX),
         static_cast<float>(current.positionY));
@@ -97,14 +98,13 @@ void Visualizer::render() {
     drawTitleBar();
     drawLegend();
 
-    // Right-side data panels
-    drawSensorPanel(0, "IMU Sensor",          imuReading,
+    drawSensorPanel(0, "IMU Sensor",         imuReading,
                     sf::Color(255, 128, 64));
-    drawSensorPanel(1, "GPS Sensor",          gpsReading,
+    drawSensorPanel(1, "GPS Sensor",         gpsReading,
                     sf::Color(64, 180, 255));
-    drawSensorPanel(2, "Temperature Sensor",  tempReading,
+    drawSensorPanel(2, "Temperature Sensor", tempReading,
                     sf::Color(255, 80, 80));
-    drawSensorPanel(3, "Wheel Encoder",       encoderReading,
+    drawSensorPanel(3, "Wheel Encoder",      encoderReading,
                     sf::Color(160, 255, 100));
     drawFusedPanel();
 
@@ -114,22 +114,19 @@ void Visualizer::render() {
 // ---- Drawing helpers ----
 
 void Visualizer::drawBackground() {
-    // Map area background
     sf::RectangleShape map(sf::Vector2f(MAP_WIDTH, MAP_HEIGHT));
-    map.setPosition(0, 0);
+    map.setPosition({0.f, 0.f});
     map.setFillColor(sf::Color(28, 34, 46));
     window.draw(map);
 
-    // Panel area background
     sf::RectangleShape panelBg(
         sf::Vector2f(WINDOW_WIDTH - MAP_WIDTH, WINDOW_HEIGHT));
-    panelBg.setPosition(MAP_WIDTH, 0);
+    panelBg.setPosition({static_cast<float>(MAP_WIDTH), 0.f});
     panelBg.setFillColor(sf::Color(22, 26, 36));
     window.draw(panelBg);
 
-    // Separator line
-    sf::RectangleShape sep(sf::Vector2f(2, WINDOW_HEIGHT));
-    sep.setPosition(MAP_WIDTH - 1, 0);
+    sf::RectangleShape sep(sf::Vector2f(2.f, WINDOW_HEIGHT));
+    sep.setPosition({static_cast<float>(MAP_WIDTH - 1), 0.f});
     sep.setFillColor(sf::Color(60, 70, 90));
     window.draw(sep);
 }
@@ -138,56 +135,53 @@ void Visualizer::drawGrid() {
     sf::Color gridColor(50, 60, 80);
     sf::Color axisColor(110, 130, 160);
 
-    // Grid lines every 5 meters
     const float spacing = 5.0f;
-    float pxPerMeter = mapScale;
-    float step = spacing * pxPerMeter;
+    float step = spacing * mapScale;
 
     // Vertical grid lines
     for (float x = mapOriginX; x < MAP_WIDTH; x += step) {
         sf::Vertex line[] = {
-            sf::Vertex(sf::Vector2f(x, 0),        gridColor),
-            sf::Vertex(sf::Vector2f(x, MAP_HEIGHT), gridColor)
+            sf::Vertex{sf::Vector2f(x, 0),            gridColor},
+            sf::Vertex{sf::Vector2f(x, MAP_HEIGHT),   gridColor}
         };
-        window.draw(line, 2, sf::Lines);
+        window.draw(line, 2, sf::PrimitiveType::Lines);
     }
     for (float x = mapOriginX - step; x > 0; x -= step) {
         sf::Vertex line[] = {
-            sf::Vertex(sf::Vector2f(x, 0),        gridColor),
-            sf::Vertex(sf::Vector2f(x, MAP_HEIGHT), gridColor)
+            sf::Vertex{sf::Vector2f(x, 0),            gridColor},
+            sf::Vertex{sf::Vector2f(x, MAP_HEIGHT),   gridColor}
         };
-        window.draw(line, 2, sf::Lines);
+        window.draw(line, 2, sf::PrimitiveType::Lines);
     }
 
     // Horizontal grid lines
     for (float y = mapOriginY; y < MAP_HEIGHT; y += step) {
         sf::Vertex line[] = {
-            sf::Vertex(sf::Vector2f(0,        y), gridColor),
-            sf::Vertex(sf::Vector2f(MAP_WIDTH, y), gridColor)
+            sf::Vertex{sf::Vector2f(0, y),            gridColor},
+            sf::Vertex{sf::Vector2f(MAP_WIDTH, y),    gridColor}
         };
-        window.draw(line, 2, sf::Lines);
+        window.draw(line, 2, sf::PrimitiveType::Lines);
     }
     for (float y = mapOriginY - step; y > 0; y -= step) {
         sf::Vertex line[] = {
-            sf::Vertex(sf::Vector2f(0,        y), gridColor),
-            sf::Vertex(sf::Vector2f(MAP_WIDTH, y), gridColor)
+            sf::Vertex{sf::Vector2f(0, y),            gridColor},
+            sf::Vertex{sf::Vector2f(MAP_WIDTH, y),    gridColor}
         };
-        window.draw(line, 2, sf::Lines);
+        window.draw(line, 2, sf::PrimitiveType::Lines);
     }
 
-    // Main axes through origin
+    // Main axes
     sf::Vertex xAxis[] = {
-        sf::Vertex(sf::Vector2f(0,        mapOriginY), axisColor),
-        sf::Vertex(sf::Vector2f(MAP_WIDTH, mapOriginY), axisColor)
+        sf::Vertex{sf::Vector2f(0, mapOriginY),           axisColor},
+        sf::Vertex{sf::Vector2f(MAP_WIDTH, mapOriginY),   axisColor}
     };
     sf::Vertex yAxis[] = {
-        sf::Vertex(sf::Vector2f(mapOriginX, 0),         axisColor),
-        sf::Vertex(sf::Vector2f(mapOriginX, MAP_HEIGHT), axisColor)
+        sf::Vertex{sf::Vector2f(mapOriginX, 0),           axisColor},
+        sf::Vertex{sf::Vector2f(mapOriginX, MAP_HEIGHT),  axisColor}
     };
-    window.draw(xAxis, 2, sf::Lines);
-    window.draw(yAxis, 2, sf::Lines);
+    window.draw(xAxis, 2, sf::PrimitiveType::Lines);
+    window.draw(yAxis, 2, sf::PrimitiveType::Lines);
 
-    // Axis labels
     drawText("X (m)", MAP_WIDTH - 55, mapOriginY + 5, 14, axisColor);
     drawText("Y (m)", mapOriginX + 5, 5,              14, axisColor);
     drawText("(0,0)", mapOriginX + 4, mapOriginY + 4, 12, axisColor);
@@ -196,16 +190,15 @@ void Visualizer::drawGrid() {
 void Visualizer::drawTrajectory() {
     if (trajectory.size() < 2) return;
 
-    // Fading line: older points more transparent
     for (size_t i = 1; i < trajectory.size(); ++i) {
         float t = static_cast<float>(i) / trajectory.size();
-        sf::Uint8 alpha = static_cast<sf::Uint8>(60 + 180 * t);
+        std::uint8_t alpha = static_cast<std::uint8_t>(60 + 180 * t);
         sf::Color col(100, 220, 255, alpha);
         sf::Vertex line[] = {
-            sf::Vertex(trajectory[i - 1], col),
-            sf::Vertex(trajectory[i],     col)
+            sf::Vertex{trajectory[i - 1], col},
+            sf::Vertex{trajectory[i],     col}
         };
-        window.draw(line, 2, sf::Lines);
+        window.draw(line, 2, sf::PrimitiveType::Lines);
     }
 }
 
@@ -215,29 +208,25 @@ void Visualizer::drawVehicle() {
         static_cast<float>(currentState.positionY));
 
     // Outer glow
-    sf::CircleShape glow(16);
-    glow.setOrigin(16, 16);
+    sf::CircleShape glow(16.f);
+    glow.setOrigin({16.f, 16.f});
     glow.setPosition(pos);
     glow.setFillColor(sf::Color(100, 220, 255, 40));
     window.draw(glow);
 
-    // Vehicle body — triangle pointing in heading direction
-    float headingRad = static_cast<float>(currentState.heading) * M_PI / 180.0f;
-    // In our world, Y points up but SFML Y points down — flip sin
+    // Vehicle body - triangle pointing in heading direction
     sf::ConvexShape body;
     body.setPointCount(3);
-    body.setPoint(0, sf::Vector2f( 14,  0));   // nose
-    body.setPoint(1, sf::Vector2f(-10,  8));   // rear right
-    body.setPoint(2, sf::Vector2f(-10, -8));   // rear left
+    body.setPoint(0, sf::Vector2f( 14.f,  0.f));
+    body.setPoint(1, sf::Vector2f(-10.f,  8.f));
+    body.setPoint(2, sf::Vector2f(-10.f, -8.f));
     body.setFillColor(sf::Color(255, 230, 100));
     body.setOutlineColor(sf::Color(255, 180, 0));
     body.setOutlineThickness(2);
     body.setPosition(pos);
-    // SFML rotates clockwise (because Y is flipped), so use -heading
-    body.setRotation(-static_cast<float>(currentState.heading));
+    body.setRotation(sf::degrees(-static_cast<float>(currentState.heading)));
     window.draw(body);
 
-    // Position label
     std::ostringstream oss;
     oss << "(" << fmt(currentState.positionX, 1) << ", "
         << fmt(currentState.positionY, 1) << ")";
@@ -252,24 +241,20 @@ void Visualizer::drawSensorPanel(int slot, const std::string& name,
     const int margin = 10;
     int y = 50 + slot * (panelH + 8);
 
-    // Panel background
     sf::RectangleShape bg(sf::Vector2f(PANEL_WIDTH, panelH));
-    bg.setPosition(PANEL_X, y);
+    bg.setPosition({static_cast<float>(PANEL_X), static_cast<float>(y)});
     bg.setFillColor(sf::Color(32, 38, 52));
     bg.setOutlineColor(sf::Color(60, 70, 90));
     bg.setOutlineThickness(1);
     window.draw(bg);
 
-    // Header strip
     sf::RectangleShape header(sf::Vector2f(PANEL_WIDTH, 24));
-    header.setPosition(PANEL_X, y);
+    header.setPosition({static_cast<float>(PANEL_X), static_cast<float>(y)});
     header.setFillColor(headerColor);
     window.draw(header);
 
-    // Title
     drawText(name, PANEL_X + margin, y + 4, 14, sf::Color::Black);
 
-    // Data rows
     int row = y + 32;
     int rowH = 18;
     sf::Color labelCol(160, 170, 190);
@@ -290,19 +275,18 @@ void Visualizer::drawSensorPanel(int slot, const std::string& name,
 }
 
 void Visualizer::drawFusedPanel() {
-    // Bottom panel spanning full panel width
     const int panelH = 130;
     int y = WINDOW_HEIGHT - panelH - 10;
 
     sf::RectangleShape bg(sf::Vector2f(PANEL_WIDTH, panelH));
-    bg.setPosition(PANEL_X, y);
+    bg.setPosition({static_cast<float>(PANEL_X), static_cast<float>(y)});
     bg.setFillColor(sf::Color(45, 55, 75));
     bg.setOutlineColor(sf::Color(120, 180, 255));
     bg.setOutlineThickness(2);
     window.draw(bg);
 
     sf::RectangleShape header(sf::Vector2f(PANEL_WIDTH, 26));
-    header.setPosition(PANEL_X, y);
+    header.setPosition({static_cast<float>(PANEL_X), static_cast<float>(y)});
     header.setFillColor(sf::Color(120, 180, 255));
     window.draw(header);
 
@@ -331,7 +315,7 @@ void Visualizer::drawFusedPanel() {
 
 void Visualizer::drawTitleBar() {
     sf::RectangleShape bar(sf::Vector2f(MAP_WIDTH, 40));
-    bar.setPosition(0, 0);
+    bar.setPosition({0.f, 0.f});
     bar.setFillColor(sf::Color(12, 15, 22, 220));
     window.draw(bar);
 
@@ -352,48 +336,42 @@ void Visualizer::drawLegend() {
     int y = 50;
 
     sf::RectangleShape bg(sf::Vector2f(190, 60));
-    bg.setPosition(x, y);
+    bg.setPosition({static_cast<float>(x), static_cast<float>(y)});
     bg.setFillColor(sf::Color(20, 25, 35, 200));
     bg.setOutlineColor(sf::Color(60, 70, 90));
     bg.setOutlineThickness(1);
     window.draw(bg);
 
-    // Vehicle swatch
     sf::ConvexShape tri;
     tri.setPointCount(3);
-    tri.setPoint(0, sf::Vector2f( 7, 0));
-    tri.setPoint(1, sf::Vector2f(-5, 5));
-    tri.setPoint(2, sf::Vector2f(-5, -5));
+    tri.setPoint(0, sf::Vector2f( 7.f,  0.f));
+    tri.setPoint(1, sf::Vector2f(-5.f,  5.f));
+    tri.setPoint(2, sf::Vector2f(-5.f, -5.f));
     tri.setFillColor(sf::Color(255, 230, 100));
-    tri.setPosition(x + 20, y + 18);
+    tri.setPosition({static_cast<float>(x + 20), static_cast<float>(y + 18)});
     window.draw(tri);
     drawText("Vehicle", x + 38, y + 10, 13, sf::Color(220, 230, 240));
 
-    // Trail swatch
     sf::Vertex trail[] = {
-        sf::Vertex(sf::Vector2f(x + 10, y + 40), sf::Color(100, 220, 255)),
-        sf::Vertex(sf::Vector2f(x + 30, y + 40), sf::Color(100, 220, 255))
+        sf::Vertex{sf::Vector2f(x + 10, y + 40), sf::Color(100, 220, 255)},
+        sf::Vertex{sf::Vector2f(x + 30, y + 40), sf::Color(100, 220, 255)}
     };
-    window.draw(trail, 2, sf::Lines);
+    window.draw(trail, 2, sf::PrimitiveType::Lines);
     drawText("Trajectory", x + 38, y + 33, 13, sf::Color(220, 230, 240));
 }
 
 void Visualizer::drawText(const std::string& str, float x, float y,
                           unsigned size, sf::Color color) {
     if (!fontLoaded) return;
-    sf::Text text;
-    text.setFont(font);
-    text.setString(str);
-    text.setCharacterSize(size);
+    sf::Text text(font, str, size);
     text.setFillColor(color);
-    text.setPosition(x, y);
+    text.setPosition({x, y});
     window.draw(text);
 }
 
 // ---- Coordinate transform ----
 
 sf::Vector2f Visualizer::worldToScreen(float wx, float wy) const {
-    // World Y points "up" but SFML screen Y points "down", so we negate Y
     return sf::Vector2f(mapOriginX + wx * mapScale,
                         mapOriginY - wy * mapScale);
 }

@@ -27,8 +27,8 @@ private:
     bool             fontLoaded;
 
     // Layout constants
-    static const int WINDOW_WIDTH  = 1400;
-    static const int WINDOW_HEIGHT = 800;
+    static const unsigned WINDOW_WIDTH  = 1400;
+    static const unsigned WINDOW_HEIGHT = 800;
     static const int MAP_WIDTH     = 1000;
     static const int MAP_HEIGHT    = 800;
     static const int PANEL_X       = 1010;

@@ -16,7 +16,7 @@ private:
     std::vector<Sensor*> sensors;
     std::vector<double>  weights;
     StateEstimate        fusedState;
-    double               predictionDt;
+    [[maybe_unused]] double predictionDt;
 
 public:
     FusionSystem();

@@ -15,7 +15,7 @@
  *   - The fused state estimate panel
  *
  * Build:
- *   g++ -std=c++17 src/*.cpp -o simulation \
+ *   g++ -std=c++17 src/ALL.cpp -o simulation \
  *       -lsfml-graphics -lsfml-window -lsfml-system
  */
 

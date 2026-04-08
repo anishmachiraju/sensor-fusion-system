@@ -16,7 +16,7 @@
 class Sensor {
 private:
     std::string  sensorType;
-    double       noiseSigma;
+    [[maybe_unused]] double noiseSigma;
     double       biasOffset;
     StateEstimate lastReading;
     bool         isCalibrated;
