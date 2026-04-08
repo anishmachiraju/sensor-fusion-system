@@ -1,7 +1,33 @@
 ================================================================================
-  PSEUDOCODE — Sensor Fusion System for Autonomous Vehicle Simulation
+  PSEUDOCODE - Sensor Fusion System for Autonomous Vehicle Simulation
   EECE 2140 | Jeongheon Han (David), Charles Wan, Anish Machiraju
 ================================================================================
+
+
+FUNCTIONALITY 0: SimConfig - User Parameter Validation
+--------------------------------------------------------------------------------
+Purpose:  Hold all user-configurable simulation parameters and validate them.
+Input:    User-entered values (speed, turn rate, duration, GPS noise, mass)
+Output:   A validated SimConfig struct, or std::invalid_argument exception
+
+STRUCT SimConfig
+    speed       (default 5.0,    range 0.1 - 50.0,    m/s)
+    turnRate    (default 10.0,   range -90.0 - 90.0,  deg/s)
+    duration    (default 0.0,    range 0.0 - 3600.0,  seconds; 0 = infinite)
+    gpsNoise    (default 1.5,    range 0.0 - 20.0,    meters)
+    mass        (default 1000.0, range 100 - 20000,   kg)
+
+FUNCTION validate() -> void
+    IF speed < MIN_SPEED OR speed > MAX_SPEED THEN
+        THROW invalid_argument("Speed must be between MIN and MAX")
+    IF turnRate < MIN_TURN OR turnRate > MAX_TURN THEN
+        THROW invalid_argument("Turn rate must be between MIN and MAX")
+    IF duration < MIN_DURATION OR duration > MAX_DURATION THEN
+        THROW invalid_argument("Duration must be between MIN and MAX")
+    IF gpsNoise < MIN_GPS_NOISE OR gpsNoise > MAX_GPS_NOISE THEN
+        THROW invalid_argument("GPS noise must be between MIN and MAX")
+    IF mass < MIN_MASS OR mass > MAX_MASS THEN
+        THROW invalid_argument("Mass must be between 100 and 20000 kg")
 
 
 FUNCTIONALITY 1: Generate Sensor Reading (Sensor base class)
@@ -38,7 +64,7 @@ FUNCTION calibrate(offset, scale) -> void
 FUNCTIONALITY 2: GPS Sensor Reading (GPSSensor subclass override)
 --------------------------------------------------------------------------------
 Purpose:  Produce noisy position data with simulated signal dropout.
-Input:    True vehicle state (StateEstimate)
+Input:    True vehicle state
 Output:   Noisy StateEstimate with perturbed positionX, positionY
 
 FUNCTION generateReading(trueState) -> StateEstimate
@@ -76,12 +102,12 @@ FUNCTION fuseData() -> StateEstimate
     FOR i = 0 TO sensors.size() - 1
         reading = sensors[i].getLastReading()
         w = weights[i]
-        fused.positionX   = fused.positionX   + w * reading.positionX
-        fused.positionY   = fused.positionY   + w * reading.positionY
-        fused.velocityX   = fused.velocityX   + w * reading.velocityX
-        fused.velocityY   = fused.velocityY   + w * reading.velocityY
-        fused.heading      = fused.heading      + w * reading.heading
-        fused.temperature  = fused.temperature  + w * reading.temperature
+        fused.positionX  = fused.positionX  + w * reading.positionX
+        fused.positionY  = fused.positionY  + w * reading.positionY
+        fused.velocityX  = fused.velocityX  + w * reading.velocityX
+        fused.velocityY  = fused.velocityY  + w * reading.velocityY
+        fused.heading    = fused.heading    + w * reading.heading
+        fused.temperature= fused.temperature+ w * reading.temperature
         totalWeight = totalWeight + w
     END FOR
 
@@ -91,15 +117,29 @@ FUNCTION fuseData() -> StateEstimate
     RETURN fusedState
 
 
-FUNCTIONALITY 4: Vehicle Step Simulation and Predict (Vehicle)
+FUNCTIONALITY 4: Vehicle with Mass-Adjusted Turn Rate
 --------------------------------------------------------------------------------
-Purpose:  Advance vehicle state via kinematics; predict future state.
-Input:    Current state, speed, turnRate, timestep dt
-Output:   Updated / predicted StateEstimate
+Purpose:  Advance vehicle state via kinematics with mass-affected turning.
+Input:    Current state, speed, commandedTurnRate, mass, timestep dt
+Output:   Updated StateEstimate
+
+CONSTRUCTOR Vehicle(initState, speed, commandedTurnRate, mass)
+    VALIDATE: speed >= 0
+    VALIDATE: 100 <= mass <= 20000
+    Store fields
+    Compute effective turn rate from mass
+    Append initState to history
+
+FUNCTION recomputeEffectiveTurnRate() -> void
+    factor = (1000 / mass) ^ 0.3
+    effectiveTurnRate = commandedTurnRate * factor
+    // 100 kg  -> factor 1.99 (turns ~2x faster)
+    // 1000 kg -> factor 1.00
+    // 20000 kg -> factor 0.41
 
 FUNCTION stepSimulation(dt) -> void
     VALIDATE: dt > 0
-    state.heading = state.heading + turnRate * dt
+    state.heading = state.heading + effectiveTurnRate * dt
     WRAP state.heading into [0, 360)
     headingRad = state.heading * pi / 180
     state.velocityX = speed * cos(headingRad)
@@ -109,80 +149,126 @@ FUNCTION stepSimulation(dt) -> void
     state.timestamp = state.timestamp + dt
     Append state to stateHistory
 
-FUNCTION predict(dt) -> StateEstimate
-    VALIDATE: dt > 0
-    predicted = copy of state
-    predicted.heading = predicted.heading + turnRate * dt
-    headingRad = predicted.heading * pi / 180
-    predicted.velocityX = speed * cos(headingRad)
-    predicted.velocityY = speed * sin(headingRad)
-    predicted.positionX = predicted.positionX + predicted.velocityX * dt
-    predicted.positionY = predicted.positionY + predicted.velocityY * dt
-    predicted.timestamp = predicted.timestamp + dt
-    RETURN predicted
 
-FUNCTION updateState(fusedEstimate) -> void
-    state = fusedEstimate
-
-FUNCTION displayState() -> void
-    Output "Time:", state.timestamp
-    Output "Position: (", state.positionX, ",", state.positionY, ")"
-    Output "Velocity: (", state.velocityX, ",", state.velocityY, ")"
-    Output "Heading:",    state.heading, "degrees"
-    Output "Temperature:", state.temperature, "C"
-
-
-FUNCTIONALITY 5: Main Simulation Loop
+FUNCTIONALITY 5: Terminal Mode Input Loop
 --------------------------------------------------------------------------------
-Purpose:  Orchestrate the full pipeline each timestep.
-Input:    Duration, dt, initial conditions, sensor configuration
-Output:   Complete state history log
+Purpose:  Read configuration from text prompts with validation and re-prompting.
+Input:    User typed values via std::cin
+Output:   Validated SimConfig
 
-FUNCTION runSimulation(duration, dt, initialState)
-    VALIDATE: duration > 0, dt > 0, dt <= duration
+FUNCTION promptDouble(label, default, min, max, units) -> double
+    LOOP forever
+        Print "  label [default units]: "
+        Read line from stdin
+        IF EOF or empty THEN RETURN default
+        Trim whitespace
+        TRY
+            v = parse line as double
+            IF v < min OR v > max THEN
+                Print "  ! out of range, try again"
+                CONTINUE
+            RETURN v
+        CATCH parse error
+            Print "  ! not a number, try again"
+            CONTINUE
+    END LOOP
 
-    // Create vehicle
-    vehicle = new Vehicle(initialState)
+FUNCTION promptForConfig() -> SimConfig
+    Print banner
+    cfg.speed     = promptDouble("Vehicle speed", 5.0, 0.1, 50.0, " m/s")
+    cfg.turnRate  = promptDouble("Turn rate", 10.0, -90.0, 90.0, " deg/s")
+    cfg.duration  = promptDouble("Duration", 30.0, 0.0, 3600.0, " s")
+    cfg.gpsNoise  = promptDouble("GPS noise sigma", 1.5, 0.0, 20.0, " m")
+    cfg.mass      = promptDouble("Vehicle mass", 1000.0, 100.0, 20000.0, " kg")
+    cfg.validate()
+    RETURN cfg
 
-    // Create and calibrate sensors
-    imu     = new IMUSensor(accelSigma, gyroBias, imuRate)
-    gps     = new GPSSensor(posSigma, posBias, gpsRate)
-    temp    = new TemperatureSensor(tempSigma, tempBias, tempRate)
-    encoder = new WheelEncoderSensor(tickSigma, tickBias, radius, ticks)
-    imu.calibrate(imuOffset, imuScale)
-    gps.calibrate(gpsOffset, gpsScale)
-    temp.calibrate(tempOffset, tempScale)
-    encoder.calibrate(encOffset, encScale)
 
-    // Register sensors with fusion system
-    fusion = new FusionSystem()
-    fusion.addSensor(imu,     0.30)
-    fusion.addSensor(gps,     0.35)
-    fusion.addSensor(temp,    0.10)
-    fusion.addSensor(encoder, 0.25)
+FUNCTIONALITY 6: GUI Input Dialog
+--------------------------------------------------------------------------------
+Purpose:  Modal SFML dialog with five text fields and inline validation.
+Input:    Mouse clicks, keyboard text entry
+Output:   Validated SimConfig (true) or cancellation (false)
 
-    // Main loop
-    currentTime = 0
-    WHILE currentTime < duration
-        vehicle.stepSimulation(dt)
-        trueState = vehicle.getState()
+FUNCTION show(outConfig) -> bool
+    Build five field structs (label, range, default text)
+    Layout field rectangles vertically
+    Layout START / CANCEL buttons at bottom
+    LOOP while window open
+        FOR each event
+            IF window closed THEN RETURN false
+            IF KeyPressed THEN
+                IF Escape THEN RETURN false
+                IF Enter  THEN attempt validation
+                IF Tab    THEN move focus to next field
+                IF Backspace THEN remove last char from focused field
+            IF TextEntered THEN
+                IF char is digit/dot/minus THEN append to focused field
+                Validate the focused field inline
+            IF MouseButtonPressed THEN
+                Hit-test against fields and buttons
+        END FOR
+        IF startClicked THEN
+            IF validateAll(outConfig) THEN
+                close window, RETURN true
+            ELSE
+                show error, allow user to fix
+        Render dialog
+    END LOOP
+    RETURN false
 
-        FOR each sensor in [imu, gps, temp, encoder]
+
+FUNCTIONALITY 7: Main Simulation Loop (Both Modes)
+--------------------------------------------------------------------------------
+Purpose:  Orchestrate the full pipeline. Different drivers for terminal vs GUI.
+
+FUNCTION runTerminal() -> int
+    cfg = promptForConfig()         // throws if invalid
+    sim = makeSimulation(cfg)
+    duration = (cfg.duration > 0) ? cfg.duration : 30.0
+    WHILE sim.currentTime < duration
+        sim.vehicle.stepSimulation(dt)
+        FOR each sensor
             IF sensor.shouldUpdate(currentTime) THEN
                 sensor.generateReading(trueState)
-        END FOR
-
-        TRY:
-            fusedEstimate = fusion.fuseData()
-            vehicle.updateState(fusedEstimate)
-            vehicle.displayState()
-        CATCH exception:
-            Output error message, continue to next step
-
-        currentTime = currentTime + dt
+        fused = sim.fusion.fuseData()
+        sim.vehicle.updateState(fused)
+        sim.vehicle.displayState()
+        currentTime += dt
     END WHILE
+    Print summary
+    RETURN 0
 
-    // Final output
-    history = vehicle.getHistory()
-    Output formatted table of all states in history
-    RETURN history
+FUNCTION runGui() -> int
+    dialog = new InputDialog
+    IF NOT dialog.show(cfg) THEN RETURN 0
+    cfg.validate()
+    sim = makeSimulation(cfg)
+    viz = new Visualizer
+    WHILE viz.isOpen()
+        viz.handleEvents()
+        IF viz.consumeResetRequest() THEN
+            sim = makeSimulation(cfg)
+            viz.clearForReset()
+        IF viz.isRunning() AND elapsed >= frameTime THEN
+            sim.vehicle.stepSimulation(dt)
+            FOR each sensor
+                IF sensor.shouldUpdate(currentTime) THEN
+                    sensor.generateReading(trueState)
+            fused = sim.fusion.fuseData()
+            sim.vehicle.updateState(fused)
+            viz.update(state, sensors..., fused)
+            currentTime += dt
+        END IF
+        viz.render()
+    END WHILE
+    RETURN 0
+
+FUNCTION main(argc, argv) -> int
+    Parse command-line arguments (--terminal, --gui, --help)
+    TRY
+        IF terminalMode THEN RETURN runTerminal()
+        ELSE                  RETURN runGui()
+    CATCH exception
+        Print "[FATAL] " + message
+        RETURN 1

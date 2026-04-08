@@ -4,10 +4,36 @@
 #include <iomanip>
 #include <stdexcept>
 
-Vehicle::Vehicle(const StateEstimate& initState, double spd, double tr)
-    : state(initState), speed(spd), turnRate(tr)
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
+Vehicle::Vehicle(const StateEstimate& initState, double spd, double tr, double m)
+    : state(initState),
+      speed(spd),
+      commandedTurnRate(tr),
+      effectiveTurnRate(tr),
+      mass(m)
 {
+    if (spd < 0.0) {
+        throw std::invalid_argument("Vehicle speed must be >= 0");
+    }
+    if (mass < 100.0 || mass > 20000.0) {
+        throw std::invalid_argument("Vehicle mass must be between 100 and 20000 kg");
+    }
+    recomputeEffectiveTurnRate();
     stateHistory.push_back(state);
+}
+
+void Vehicle::recomputeEffectiveTurnRate() {
+    // Heavier vehicles turn more slowly (higher rotational inertia).
+    // Baseline mass is 1000 kg → factor 1.0.
+    //   100 kg  → factor 1.93 (turns ~2x faster)
+    //   1000 kg → factor 1.00
+    //   5000 kg → factor 0.62
+    //  20000 kg → factor 0.39
+    double factor = std::pow(1000.0 / mass, 0.3);
+    effectiveTurnRate = commandedTurnRate * factor;
 }
 
 void Vehicle::stepSimulation(double dt) {
@@ -15,8 +41,8 @@ void Vehicle::stepSimulation(double dt) {
         throw std::invalid_argument("Timestep dt must be > 0");
     }
 
-    // Update heading
-    state.heading += turnRate * dt;
+    // Update heading using the mass-adjusted turn rate
+    state.heading += effectiveTurnRate * dt;
 
     // Wrap heading into [0, 360)
     while (state.heading >= 360.0) state.heading -= 360.0;
@@ -47,7 +73,7 @@ StateEstimate Vehicle::predict(double dt) const {
 
     StateEstimate predicted = state;
 
-    predicted.heading += turnRate * dt;
+    predicted.heading += effectiveTurnRate * dt;
     while (predicted.heading >= 360.0) predicted.heading -= 360.0;
     while (predicted.heading <    0.0) predicted.heading += 360.0;
 
