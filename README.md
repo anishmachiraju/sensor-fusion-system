@@ -130,10 +130,20 @@ g++ -std=c++17 -o simulation src/*.cpp \
 
 ## Controls
 
+The GUI has three on-screen buttons at the bottom of the map:
+
+| Button   | Action                                    |
+|----------|-------------------------------------------|
+| **START** | Begin simulation (becomes RESUME when paused) |
+| **PAUSE** | Pause the running simulation              |
+| **RESET** | Rebuild the simulation from t=0           |
+
+Keyboard shortcuts still work:
+
 | Key      | Action                     |
 |----------|----------------------------|
 | `SPACE`  | Pause / resume simulation  |
-| `R`      | Clear the trajectory trail |
+| `R`      | Reset simulation to t=0    |
 | `ESC`    | Close window and quit      |
 
 ## How It Works
