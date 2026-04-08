@@ -1,0 +1,462 @@
+\documentclass[a4paper,11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{hyperref}
+\usepackage{float}
+\usepackage{enumitem}
+
+\title{\textbf{Iteration \#05   Technical Iteration} \\ \large Pseudocode, GitHub Setup, and Implementation Planning \\ \bigskip \normalsize Sensor Fusion System for Autonomous Vehicle Simulation}
+\author{Jeongheon Han (David), Charles Wan, Anish Machiraju \\ EECE 2140   Professor Nafa}
+\date{April 2026}
+
+\begin{document}
+\maketitle
+
+\noindent\textbf{GitHub Repository:} \url{https://github.com/anishmachiraju/sensor-fusion-system}
+
+%% ============================================================
+\section{Detailed Pseudocode}
+%% ============================================================
+
+The pseudocode below covers five major functionalities of the sensor fusion system. Each section is written clearly enough to be translated directly into C++ code.
+
+\begin{table}[H]
+\centering
+\small
+\renewcommand{\arraystretch}{1.35}
+\begin{tabularx}{\textwidth}{>{\bfseries}p{3cm} X p{3.2cm} p{3.2cm}}
+\toprule
+Functionality & Purpose & Input & Output \\
+\midrule
+Generate Sensor Reading &
+Produces a noisy measurement from the true vehicle state for a given sensor type. &
+True vehicle state, noise parameters &
+Noisy \texttt{StateEstimate} \\
+\addlinespace
+Fuse Sensor Data &
+Combines calibrated readings from all registered sensors into one accurate estimate using weighted averaging. &
+Vector of sensor readings, weight vector &
+Fused \texttt{StateEstimate} \\
+\addlinespace
+Step Vehicle Simulation &
+Advances the vehicle's true state by one timestep using a kinematic motion model. &
+Current state, speed, turn rate, $dt$ &
+Updated true state \\
+\addlinespace
+Predict Next State &
+Projects the current fused estimate forward in time for look-ahead planning. &
+Current fused state, $dt$ &
+Predicted \texttt{StateEstimate} \\
+\addlinespace
+Main Simulation Loop &
+Orchestrates the full pipeline each timestep: step vehicle, generate readings, fuse, update, log, and display. &
+Duration, $dt$, initial conditions, sensor config &
+Complete state history \\
+\bottomrule
+\end{tabularx}
+\caption{Summary of pseudocode functionalities.}
+\end{table}
+
+% ==================== PSEUDOCODE 1 ====================
+\begin{algorithm}[H]
+\caption{Sensor::generateReading   Generate a Noisy Sensor Reading}
+\begin{algorithmic}[1]
+
+\State \textbf{Class} \textit{Sensor} (base class)
+
+\State \hspace{0.5cm} \textbf{Private:}
+\State \hspace{1cm} \textit{sensorType} $\rightarrow$ string
+\State \hspace{1cm} \textit{noiseSigma} $\rightarrow$ double
+\State \hspace{1cm} \textit{biasOffset} $\rightarrow$ double
+\State \hspace{1cm} \textit{lastReading} $\rightarrow$ StateEstimate
+\State \hspace{1cm} \textit{isCalibrated} $\rightarrow$ bool
+\State \hspace{1cm} \textit{calibrationOffset} $\rightarrow$ double
+\State \hspace{1cm} \textit{calibrationScale} $\rightarrow$ double
+
+\State \hspace{0.5cm} \textbf{Protected:}
+\State \hspace{1cm} \textit{updateRate} $\rightarrow$ double
+\State \hspace{1cm} \textit{lastUpdateTime} $\rightarrow$ double
+
+\State \hspace{0.5cm} \textbf{Public:}
+
+\vspace{0.2cm}
+\State \hspace{1cm} \textbf{Function} shouldUpdate(currentTime) $\rightarrow$ bool
+\State \hspace{1.5cm} interval $\leftarrow$ 1.0 / updateRate
+\State \hspace{1.5cm} \If{currentTime $-$ lastUpdateTime $\geq$ interval}
+\State \hspace{2cm} \Return true
+\State \hspace{1.5cm} \Else
+\State \hspace{2cm} \Return false
+\State \hspace{1.5cm} \EndIf
+\State \hspace{1cm} \textbf{End Function}
+
+\vspace{0.2cm}
+\State \hspace{1cm} \textbf{Function} generateReading(trueState) $\rightarrow$ StateEstimate
+\State \hspace{1.5cm} \textbf{Validate:} trueState timestamp $\geq 0$
+\State \hspace{1.5cm} reading $\leftarrow$ copy of trueState
+\State \hspace{1.5cm} noise $\leftarrow$ random Gaussian(mean=0, stddev=noiseSigma)
+\State \hspace{1.5cm} Add noise + biasOffset to the relevant fields of reading
+\State \hspace{1.5cm} \If{isCalibrated}
+\State \hspace{2cm} reading fields $\leftarrow$ (reading fields $-$ calibrationOffset) $\times$ calibrationScale
+\State \hspace{1.5cm} \EndIf
+\State \hspace{1.5cm} lastReading $\leftarrow$ reading
+\State \hspace{1.5cm} lastUpdateTime $\leftarrow$ trueState.timestamp
+\State \hspace{1.5cm} \Return reading
+\State \hspace{1cm} \textbf{End Function}
+
+\vspace{0.2cm}
+\State \hspace{1cm} \textbf{Function} calibrate(offset, scale) $\rightarrow$ void
+\State \hspace{1.5cm} \textbf{Validate:} scale $\neq$ 0
+\State \hspace{1.5cm} calibrationOffset $\leftarrow$ offset
+\State \hspace{1.5cm} calibrationScale $\leftarrow$ scale
+\State \hspace{1.5cm} isCalibrated $\leftarrow$ true
+\State \hspace{1cm} \textbf{End Function}
+
+\State \textbf{End Class}
+
+\end{algorithmic}
+\end{algorithm}
+
+\noindent\textit{Note:} Each sensor subclass (\texttt{IMUSensor}, \texttt{GPSSensor}, \texttt{TemperatureSensor}, \texttt{WheelEncoderSensor}) overrides \texttt{generateReading()} to add noise only to its relevant fields. For example, \texttt{GPSSensor} perturbs only \texttt{positionX} and \texttt{positionY}, and may randomly return a stale reading to simulate signal dropout.
+
+% ==================== PSEUDOCODE 2 ====================
+\begin{algorithm}[H]
+\caption{GPSSensor::generateReading   Subclass Override with Signal Dropout}
+\begin{algorithmic}[1]
+
+\State \textbf{Class} \textit{GPSSensor} \textbf{extends} \textit{Sensor}
+
+\State \hspace{0.5cm} \textbf{Private:}
+\State \hspace{1cm} \textit{positionNoiseSigma} $\rightarrow$ double
+\State \hspace{1cm} \textit{positionBias} $\rightarrow$ double
+\State \hspace{1cm} \textit{dropoutRate} $\rightarrow$ double \Comment{probability of signal loss}
+
+\State \hspace{0.5cm} \textbf{Public:}
+
+\State \hspace{1cm} \textbf{Function} generateReading(trueState) $\rightarrow$ StateEstimate
+\State \hspace{1.5cm} \textbf{Validate:} trueState is not empty
+\State \hspace{1.5cm} \If{random uniform(0,\,1) $<$ dropoutRate}
+\State \hspace{2cm} \Return lastReading \Comment{simulate signal loss}
+\State \hspace{1.5cm} \EndIf
+\State \hspace{1.5cm} reading $\leftarrow$ copy of trueState
+\State \hspace{1.5cm} noiseX $\leftarrow$ Gaussian(0, positionNoiseSigma)
+\State \hspace{1.5cm} noiseY $\leftarrow$ Gaussian(0, positionNoiseSigma)
+\State \hspace{1.5cm} reading.positionX $\leftarrow$ reading.positionX + noiseX + positionBias
+\State \hspace{1.5cm} reading.positionY $\leftarrow$ reading.positionY + noiseY + positionBias
+\State \hspace{1.5cm} \If{isCalibrated}
+\State \hspace{2cm} Apply calibration offset and scale to position fields
+\State \hspace{1.5cm} \EndIf
+\State \hspace{1.5cm} lastReading $\leftarrow$ reading
+\State \hspace{1.5cm} lastUpdateTime $\leftarrow$ trueState.timestamp
+\State \hspace{1.5cm} \Return reading
+\State \hspace{1cm} \textbf{End Function}
+
+\State \textbf{End Class}
+
+\end{algorithmic}
+\end{algorithm}
+
+% ==================== PSEUDOCODE 3 ====================
+\begin{algorithm}[H]
+\caption{FusionSystem::fuseData   Weighted-Average Sensor Fusion}
+\begin{algorithmic}[1]
+
+\State \textbf{Class} \textit{FusionSystem}
+
+\State \hspace{0.5cm} \textbf{Private:}
+\State \hspace{1cm} \textit{sensors} $\rightarrow$ vector of Sensor pointers
+\State \hspace{1cm} \textit{weights} $\rightarrow$ vector of doubles
+\State \hspace{1cm} \textit{fusedState} $\rightarrow$ StateEstimate
+
+\State \hspace{0.5cm} \textbf{Public:}
+
+\State \hspace{1cm} \textbf{Function} addSensor(sensor, weight) $\rightarrow$ void
+\State \hspace{1.5cm} \textbf{Validate:} sensor is not null, weight $> 0$
+\State \hspace{1.5cm} Append sensor to sensors list
+\State \hspace{1.5cm} Append weight to weights list
+\State \hspace{1cm} \textbf{End Function}
+
+\vspace{0.2cm}
+\State \hspace{1cm} \textbf{Function} fuseData() $\rightarrow$ StateEstimate
+\State \hspace{1.5cm} \textbf{Validate:} sensors list is not empty
+\State \hspace{1.5cm} totalWeight $\leftarrow 0$
+\State \hspace{1.5cm} fused $\leftarrow$ new StateEstimate with all fields set to 0
+
+\vspace{0.15cm}
+\State \hspace{1.5cm} \For{$i \leftarrow 0$ \textbf{to} sensors.size()$-1$}
+\State \hspace{2cm} reading $\leftarrow$ sensors[$i$].getLastReading()
+\State \hspace{2cm} w $\leftarrow$ weights[$i$]
+\State \hspace{2cm} fused.positionX $\leftarrow$ fused.positionX + w $\times$ reading.positionX
+\State \hspace{2cm} fused.positionY $\leftarrow$ fused.positionY + w $\times$ reading.positionY
+\State \hspace{2cm} fused.velocityX $\leftarrow$ fused.velocityX + w $\times$ reading.velocityX
+\State \hspace{2cm} fused.velocityY $\leftarrow$ fused.velocityY + w $\times$ reading.velocityY
+\State \hspace{2cm} fused.heading $\leftarrow$ fused.heading + w $\times$ reading.heading
+\State \hspace{2cm} fused.temperature $\leftarrow$ fused.temperature + w $\times$ reading.temperature
+\State \hspace{2cm} totalWeight $\leftarrow$ totalWeight + w
+\State \hspace{1.5cm} \EndFor
+
+\vspace{0.15cm}
+\State \hspace{1.5cm} \textbf{Validate:} totalWeight $> 0$
+\State \hspace{1.5cm} Divide every fused field by totalWeight \Comment{normalize}
+\State \hspace{1.5cm} fusedState $\leftarrow$ fused
+\State \hspace{1.5cm} \Return fusedState
+\State \hspace{1cm} \textbf{End Function}
+
+\State \textbf{End Class}
+
+\end{algorithmic}
+\end{algorithm}
+
+% ==================== PSEUDOCODE 4 ====================
+\begin{algorithm}[H]
+\caption{Vehicle   Step Simulation, Predict, Update, and Display}
+\begin{algorithmic}[1]
+
+\State \textbf{Class} \textit{Vehicle}
+
+\State \hspace{0.5cm} \textbf{Private:}
+\State \hspace{1cm} \textit{state} $\rightarrow$ StateEstimate
+\State \hspace{1cm} \textit{stateHistory} $\rightarrow$ vector of StateEstimate
+\State \hspace{1cm} \textit{speed} $\rightarrow$ double
+\State \hspace{1cm} \textit{turnRate} $\rightarrow$ double
+
+\State \hspace{0.5cm} \textbf{Public:}
+
+\State \hspace{1cm} \textbf{Function} stepSimulation(dt) $\rightarrow$ void
+\State \hspace{1.5cm} \textbf{Validate:} dt $> 0$
+\State \hspace{1.5cm} state.heading $\leftarrow$ state.heading + turnRate $\times$ dt
+\State \hspace{1.5cm} \textbf{Wrap} state.heading into range [0, 360)
+\State \hspace{1.5cm} headingRad $\leftarrow$ state.heading $\times$ $\pi$ / 180
+\State \hspace{1.5cm} state.velocityX $\leftarrow$ speed $\times$ cos(headingRad)
+\State \hspace{1.5cm} state.velocityY $\leftarrow$ speed $\times$ sin(headingRad)
+\State \hspace{1.5cm} state.positionX $\leftarrow$ state.positionX + state.velocityX $\times$ dt
+\State \hspace{1.5cm} state.positionY $\leftarrow$ state.positionY + state.velocityY $\times$ dt
+\State \hspace{1.5cm} state.timestamp $\leftarrow$ state.timestamp + dt
+\State \hspace{1.5cm} Append state to stateHistory
+\State \hspace{1cm} \textbf{End Function}
+
+\vspace{0.3cm}
+
+\State \hspace{1cm} \textbf{Function} predict(dt) $\rightarrow$ StateEstimate
+\State \hspace{1.5cm} \textbf{Validate:} dt $> 0$
+\State \hspace{1.5cm} predicted $\leftarrow$ copy of state
+\State \hspace{1.5cm} predicted.heading $\leftarrow$ predicted.heading + turnRate $\times$ dt
+\State \hspace{1.5cm} headingRad $\leftarrow$ predicted.heading $\times$ $\pi$ / 180
+\State \hspace{1.5cm} predicted.velocityX $\leftarrow$ speed $\times$ cos(headingRad)
+\State \hspace{1.5cm} predicted.velocityY $\leftarrow$ speed $\times$ sin(headingRad)
+\State \hspace{1.5cm} predicted.positionX $\leftarrow$ predicted.positionX + predicted.velocityX $\times$ dt
+\State \hspace{1.5cm} predicted.positionY $\leftarrow$ predicted.positionY + predicted.velocityY $\times$ dt
+\State \hspace{1.5cm} predicted.timestamp $\leftarrow$ predicted.timestamp + dt
+\State \hspace{1.5cm} \Return predicted
+\State \hspace{1cm} \textbf{End Function}
+
+\vspace{0.3cm}
+
+\State \hspace{1cm} \textbf{Function} updateState(fusedEstimate) $\rightarrow$ void
+\State \hspace{1.5cm} state $\leftarrow$ fusedEstimate
+\State \hspace{1cm} \textbf{End Function}
+
+\vspace{0.3cm}
+
+\State \hspace{1cm} \textbf{Function} displayState() $\rightarrow$ void
+\State \hspace{1.5cm} Output ``Time:'', state.timestamp
+\State \hspace{1.5cm} Output ``Position: ('', state.positionX, ``,'', state.positionY, ``)''
+\State \hspace{1.5cm} Output ``Velocity: ('', state.velocityX, ``,'', state.velocityY, ``)''
+\State \hspace{1.5cm} Output ``Heading:'', state.heading, ``degrees''
+\State \hspace{1.5cm} Output ``Temperature:'', state.temperature, ``C''
+\State \hspace{1cm} \textbf{End Function}
+
+\State \textbf{End Class}
+
+\end{algorithmic}
+\end{algorithm}
+
+% ==================== PSEUDOCODE 5 ====================
+\begin{algorithm}[H]
+\caption{Main Simulation Loop   Full Pipeline}
+\begin{algorithmic}[1]
+
+\State \textbf{Function} runSimulation(duration, dt, initialState)
+
+\vspace{0.15cm}
+\State \Comment{  Validate configuration  }
+\State \textbf{Validate:} duration $> 0$, dt $> 0$, dt $\leq$ duration
+
+\vspace{0.15cm}
+\State \Comment{  Create vehicle  }
+\State vehicle $\leftarrow$ new Vehicle(initialState)
+
+\vspace{0.15cm}
+\State \Comment{  Create and calibrate sensors  }
+\State imu $\leftarrow$ new IMUSensor(accelSigma, gyroBias, imuRate)
+\State gps $\leftarrow$ new GPSSensor(posSigma, posBias, gpsRate)
+\State temp $\leftarrow$ new TemperatureSensor(tempSigma, tempBias, tempRate)
+\State encoder $\leftarrow$ new WheelEncoderSensor(tickSigma, tickBias, radius, ticks)
+\State imu.calibrate(imuOffset, imuScale)
+\State gps.calibrate(gpsOffset, gpsScale)
+\State temp.calibrate(tempOffset, tempScale)
+\State encoder.calibrate(encOffset, encScale)
+
+\vspace{0.15cm}
+\State \Comment{  Register sensors with fusion system  }
+\State fusion $\leftarrow$ new FusionSystem()
+\State fusion.addSensor(imu, 0.30)
+\State fusion.addSensor(gps, 0.35)
+\State fusion.addSensor(temp, 0.10)
+\State fusion.addSensor(encoder, 0.25)
+
+\vspace{0.15cm}
+\State \Comment{  Run simulation  }
+\State currentTime $\leftarrow 0$
+\While{currentTime $<$ duration}
+\State \hspace{0.5cm} vehicle.stepSimulation(dt) \Comment{advance ground truth}
+\State \hspace{0.5cm} trueState $\leftarrow$ vehicle.getState()
+\State \hspace{0.5cm} \For{each sensor in [imu, gps, temp, encoder]}
+\State \hspace{1cm} \If{sensor.shouldUpdate(currentTime)}
+\State \hspace{1.5cm} sensor.generateReading(trueState)
+\State \hspace{1cm} \EndIf
+\State \hspace{0.5cm} \EndFor
+\State \hspace{0.5cm} \textbf{Try:}
+\State \hspace{1cm} fusedEstimate $\leftarrow$ fusion.fuseData()
+\State \hspace{1cm} vehicle.updateState(fusedEstimate)
+\State \hspace{1cm} vehicle.displayState()
+\State \hspace{0.5cm} \textbf{Catch} exception:
+\State \hspace{1cm} Output error message, continue to next step
+\State \hspace{0.5cm} currentTime $\leftarrow$ currentTime + dt
+\EndWhile
+
+\vspace{0.15cm}
+\State \Comment{  Final output  }
+\State history $\leftarrow$ vehicle.getHistory()
+\State Output formatted table of all states in history
+\State \Return history
+
+\State \textbf{End Function}
+
+\end{algorithmic}
+\end{algorithm}
+
+%% ============================================================
+\section{Class Interaction and Responsibility}
+%% ============================================================
+
+\begin{table}[H]
+\centering
+\small
+\renewcommand{\arraystretch}{1.4}
+\begin{tabularx}{\textwidth}{>{\bfseries\ttfamily}p{2.2cm} X p{2.8cm} X}
+\toprule
+\textnormal{\textbf{Class Name}} & Responsibility & Interacts With & Reason \\
+\midrule
+StateEstimate &
+Stores all vehicle state variables (position, velocity, heading, temperature, timestamp) in a single lightweight struct. &
+Sensor, FusionSystem, Vehicle &
+Provides a standardized data type so every component can exchange state information without ambiguity. \\
+\addlinespace
+Sensor \textnormal{(base)} &
+Defines the shared interface for all sensor types: stores noise and calibration parameters, generates noisy readings, and tracks update timing. &
+StateEstimate, FusionSystem &
+Encapsulates common sensor behavior; enables polymorphism so FusionSystem can treat every sensor uniformly through a base pointer. \\
+\addlinespace
+IMUSensor &
+Generates noisy acceleration and heading data by overriding \texttt{generateReading()} to perturb only inertial fields. &
+Sensor (inherits), StateEstimate &
+Models the inertial measurement unit, critical for estimating orientation and short-term velocity changes. \\
+\addlinespace
+GPSSensor &
+Generates noisy position data and simulates occasional signal dropout via a configurable dropout rate. &
+Sensor (inherits), StateEstimate &
+Models GPS, providing absolute position but subject to latency and satellite occlusion. \\
+\addlinespace
+Temperature- Sensor &
+Generates noisy temperature readings with a simulated thermal response delay. &
+Sensor (inherits), StateEstimate &
+Models an ambient temperature sensor for environmental monitoring. \\
+\addlinespace
+WheelEncoder- Sensor &
+Generates noisy velocity estimates based on wheel rotation using wheel radius and ticks per revolution. &
+Sensor (inherits), StateEstimate &
+Models odometry input, providing continuous velocity data that complements GPS and IMU. \\
+\addlinespace
+FusionSystem &
+Registers multiple sensors, collects their latest calibrated readings, and computes a weighted-average fused state estimate. &
+Sensor (via pointers), StateEstimate &
+Central intelligence of the system; no single sensor is reliable alone, so fusion combines them for accuracy. \\
+\addlinespace
+Vehicle &
+Maintains the ground-truth state, advances it using kinematics, stores the full state history, and displays output to console. &
+StateEstimate, FusionSystem (receives fused estimate) &
+Represents the autonomous vehicle being simulated; owns the truth that sensors observe and the log that captures results. \\
+\bottomrule
+\end{tabularx}
+\caption{Class interaction and responsibility overview.}
+\end{table}
+
+\subsection{How the Classes Work Together}
+
+The simulation follows a clear chain of responsibility:
+
+\begin{enumerate}[leftmargin=1.5cm]
+\item \textbf{Vehicle} holds the ground-truth state and advances it each timestep using a kinematic model (\texttt{stepSimulation}).
+\item Each \textbf{Sensor} subclass (\texttt{IMUSensor}, \texttt{GPSSensor}, \texttt{TemperatureSensor}, \texttt{WheelEncoderSensor}) observes the true state through its \texttt{generateReading()} method, adding type-specific noise and bias. Polymorphism allows the \texttt{FusionSystem} to call the same interface on any sensor.
+\item \textbf{FusionSystem} iterates over all registered sensors, retrieves their latest readings via \texttt{getLastReading()}, and computes a weighted-average \texttt{StateEstimate}. The fused result is more accurate than any individual sensor.
+\item The fused estimate is fed back to \textbf{Vehicle} via \texttt{updateState()}, simulating how a real autonomous vehicle would correct its self-estimate based on sensor fusion.
+\item \textbf{StateEstimate} is the shared data contract used in every exchange, ensuring type safety and clarity across all classes.
+\end{enumerate}
+
+%% ============================================================
+\section{GitHub Repository Structure}
+%% ============================================================
+
+The repository has been updated using Git command-line tools (\texttt{git add .}, \texttt{git commit -m "..."}, \texttt{git push}). The current structure is:
+
+\begin{verbatim}
+sensor-fusion-system/
+|-- README.md
+|-- docs/
+|   |-- System_Design_Overview.pdf
+|   |-- Iteration05_Pseudocode.pdf
+|-- pseudocode/
+|   |-- pseudocode.txt
+|-- src/
+|   |-- main.cpp
+|   |-- StateEstimate.h
+|   |-- Sensor.h
+|   |-- Sensor.cpp
+|   |-- IMUSensor.h
+|   |-- IMUSensor.cpp
+|   |-- GPSSensor.h
+|   |-- GPSSensor.cpp
+|   |-- TemperatureSensor.h
+|   |-- TemperatureSensor.cpp
+|   |-- WheelEncoderSensor.h
+|   |-- WheelEncoderSensor.cpp
+|   |-- FusionSystem.h
+|   |-- FusionSystem.cpp
+|   |-- Vehicle.h
+|   |-- Vehicle.cpp
+|-- images/
+    |-- system_diagram.png
+\end{verbatim}
+
+%% ============================================================
+\section{README.md Summary}
+%% ============================================================
+
+The repository README.md includes:
+
+\begin{itemize}[leftmargin=1.5cm]
+\item \textbf{Project Title:} Sensor Fusion System for Autonomous Vehicle Simulation
+\item \textbf{Team Members:} Jeongheon Han (David), Charles Wan, Anish Machiraju
+\item \textbf{Project Overview:} A C++ simulation that integrates data from IMU, GPS, temperature, and wheel encoder sensors using a weighted-average fusion algorithm to estimate and predict the motion and state of an autonomous vehicle.
+\item \textbf{Main Functionalities:} Sensor simulation with noise, calibration, weighted-average data fusion, kinematic state prediction, simulation loop, formatted output, and exception handling.
+\item \textbf{OOP Design Summary:} Eight components \texttt{StateEstimate} struct, \texttt{Sensor} base class, four sensor subclasses, \texttt{FusionSystem}, and \texttt{Vehicle} connected via polymorphism and a shared data contract.
+\item \textbf{Tools and Technologies:} C++17, Git / GitHub, VS Code, Google Workspace, Claude.
+\item \textbf{Folder Structure:} \texttt{src/} for source code, \texttt{docs/} for PDFs, \texttt{pseudocode/} for planning, \texttt{images/} for diagrams.
+\item \textbf{Build Instructions:} \texttt{g++ -std=c++17 -o simulation src/*.cpp} then \texttt{./simulation}.
+\item \textbf{Project Goals:} Demonstrate sensor fusion concepts, practice collaborative C++ development with Git, and produce a well-documented, fully functional simulation.
+\end{itemize}
+
+\end{document}

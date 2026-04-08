@@ -8,11 +8,22 @@
  * IMU, GPS, Temperature, and Wheel Encoder sensors. Noisy readings
  * from each sensor are fused via a weighted-average algorithm to
  * produce an accurate state estimate at every timestep.
+ *
+ * Interactive GUI dashboard built with SFML shows:
+ *   - A live 2D map with the vehicle, heading arrow, and trajectory
+ *   - Real-time data panels for all four sensors
+ *   - The fused state estimate panel
+ *
+ * Build:
+ *   g++ -std=c++17 src/*.cpp -o simulation \
+ *       -lsfml-graphics -lsfml-window -lsfml-system
  */
 
 #include <iostream>
 #include <iomanip>
 #include <stdexcept>
+#include <chrono>
+#include <thread>
 
 #include "StateEstimate.h"
 #include "IMUSensor.h"
@@ -21,11 +32,11 @@
 #include "WheelEncoderSensor.h"
 #include "FusionSystem.h"
 #include "Vehicle.h"
+#include "Visualizer.h"
 
 int main() {
     // ---- Configuration ----
-    double duration = 10.0;   // total simulation time (seconds)
-    double dt       = 0.5;    // timestep size (seconds)
+    double dt = 0.1;   // timestep size (seconds) - smaller for smooth animation
 
     // ---- Initial vehicle state ----
     StateEstimate initState;
@@ -43,17 +54,10 @@ int main() {
     Vehicle vehicle(initState, vehicleSpeed, vehicleTurnRate);
 
     // ---- Create sensors ----
-    //                       accelSigma  gyroSigma  accelBias  gyroBias  rate(Hz)
-    IMUSensor imu(             0.3,        0.5,       0.05,      0.02,    100.0);
-
-    //                       posSigma  posBias  dropout  rate(Hz)
-    GPSSensor gps(             1.5,      0.1,    0.05,    1.0);
-
-    //                       sigma  bias   delay  rate(Hz)
-    TemperatureSensor temp(    0.2,   0.1,   0.3,   1.0);
-
-    //                            sigma  bias   radius  ticks  rate(Hz)
-    WheelEncoderSensor encoder(    0.5,   0.05,  0.3,    360,   50.0);
+    IMUSensor          imu(   0.3,  0.5,  0.05, 0.02, 100.0);
+    GPSSensor          gps(   1.5,  0.1,  0.05, 1.0);
+    TemperatureSensor  temp(  0.2,  0.1,  0.3,  1.0);
+    WheelEncoderSensor encoder(0.5, 0.05, 0.3, 360, 50.0);
 
     // ---- Calibrate sensors ----
     imu.calibrate(0.05, 1.0);
@@ -61,67 +65,85 @@ int main() {
     temp.calibrate(0.1, 1.0);
     encoder.calibrate(0.05, 1.0);
 
-    // ---- Set up fusion system ----
+    // ---- Fusion system ----
     FusionSystem fusion;
     fusion.addSensor(&imu,     0.30);
     fusion.addSensor(&gps,     0.35);
     fusion.addSensor(&temp,    0.10);
     fusion.addSensor(&encoder, 0.25);
 
-    // ---- Print header ----
-    std::cout << "============================================================"
-              << "============================\n";
+    // ---- Launch GUI ----
+    Visualizer viz;
+
+    std::cout << "========================================================\n";
     std::cout << "  Sensor Fusion System — Autonomous Vehicle Simulation\n";
-    std::cout << "  Duration: " << duration << "s   Timestep: " << dt << "s\n";
-    std::cout << "============================================================"
-              << "============================\n\n";
+    std::cout << "  GUI launched. Controls:\n";
+    std::cout << "    SPACE  pause / resume\n";
+    std::cout << "    R      clear trajectory trail\n";
+    std::cout << "    ESC    quit\n";
+    std::cout << "========================================================\n";
 
-    // ---- Simulation loop ----
+    // ---- Main loop: runs until window closes ----
     double currentTime = 0.0;
-    while (currentTime < duration) {
-        // Step 1: Advance ground-truth vehicle state
-        vehicle.stepSimulation(dt);
-        StateEstimate trueState = vehicle.getState();
+    auto lastFrameTime = std::chrono::steady_clock::now();
 
-        // Step 2: Generate sensor readings (if update rate allows)
-        if (imu.shouldUpdate(currentTime)) {
-            imu.generateReading(trueState);
+    while (viz.isOpen()) {
+        viz.handleEvents();
+
+        // Throttle simulation to real-time (~100ms per step)
+        auto now = std::chrono::steady_clock::now();
+        double elapsed = std::chrono::duration<double>(now - lastFrameTime).count();
+
+        if (!viz.isPaused() && elapsed >= 0.05) {
+            lastFrameTime = now;
+
+            // Step 1: Advance ground-truth vehicle state
+            vehicle.stepSimulation(dt);
+            StateEstimate trueState = vehicle.getState();
+
+            // Step 2: Generate sensor readings (throttled by update rate)
+            if (imu.shouldUpdate(currentTime))     imu.generateReading(trueState);
+            if (gps.shouldUpdate(currentTime))     gps.generateReading(trueState);
+            if (temp.shouldUpdate(currentTime))    temp.generateReading(trueState);
+            if (encoder.shouldUpdate(currentTime)) encoder.generateReading(trueState);
+
+            // Step 3: Fuse
+            try {
+                StateEstimate fusedEstimate = fusion.fuseData();
+                vehicle.updateState(fusedEstimate);
+
+                // Step 4: Push data into the visualizer
+                viz.update(vehicle.getState(),
+                           imu.getLastReading(),
+                           gps.getLastReading(),
+                           temp.getLastReading(),
+                           encoder.getLastReading(),
+                           fusedEstimate);
+
+                // Also log to console
+                std::cout << std::fixed << std::setprecision(2)
+                          << "t=" << std::setw(6) << currentTime
+                          << "s  pos=(" << std::setw(7) << fusedEstimate.positionX
+                          << ", "       << std::setw(7) << fusedEstimate.positionY
+                          << ")  hdg="  << std::setw(6) << fusedEstimate.heading
+                          << "deg\n";
+
+            } catch (const std::exception& e) {
+                std::cerr << "[ERROR] Fusion failed at t=" << currentTime
+                          << ": " << e.what() << std::endl;
+            }
+
+            currentTime += dt;
         }
-        if (gps.shouldUpdate(currentTime)) {
-            gps.generateReading(trueState);
-        }
-        if (temp.shouldUpdate(currentTime)) {
-            temp.generateReading(trueState);
-        }
-        if (encoder.shouldUpdate(currentTime)) {
-            encoder.generateReading(trueState);
-        }
 
-        // Step 3: Fuse all latest readings
-        try {
-            StateEstimate fusedEstimate = fusion.fuseData();
+        // Always render (even when paused, so UI stays responsive)
+        viz.render();
 
-            // Step 4: Update vehicle with fused estimate
-            vehicle.updateState(fusedEstimate);
-
-            // Step 5: Display
-            vehicle.displayState();
-
-        } catch (const std::exception& e) {
-            std::cerr << "[ERROR] Fusion failed at t=" << currentTime
-                      << ": " << e.what() << std::endl;
-        }
-
-        currentTime += dt;
+        // Sleep briefly so we don't peg the CPU
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
 
-    // ---- Summary ----
-    std::cout << "\n============================================================"
-              << "============================\n";
-    std::cout << "  Simulation complete. Total timesteps: "
-              << vehicle.getHistory().size() << std::endl;
-    std::cout << "============================================================"
-              << "============================\n";
-
+    std::cout << "\nSimulation window closed. Final time: "
+              << currentTime << "s\n";
     return 0;
 }

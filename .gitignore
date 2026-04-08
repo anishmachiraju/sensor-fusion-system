@@ -1,0 +1,12 @@
+# Build output
+simulation
+simulation_gui
+*.o
+*.obj
+*.exe
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+.DS_Store
