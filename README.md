@@ -4,7 +4,7 @@
 
 An interactive C++ simulation of an autonomous vehicle equipped with IMU, GPS,
 Temperature, and Wheel Encoder sensors. Noisy sensor readings are fused using a
-weighted-average algorithm. The program runs in two modes — a terminal mode
+weighted-average algorithm. The program runs in two modes a terminal mode
 with text prompts, and a GUI mode with a startup configuration dialog and a
 live SFML graphics dashboard.
 
